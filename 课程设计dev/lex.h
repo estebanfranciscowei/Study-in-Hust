@@ -9,11 +9,12 @@ enum token_kind {
     /* 标识符与常量 */
     IDENT,
     INT_CONST,
+    LONG_CONST,     /* long整型常量(带L/l后缀) */
     FLOAT_CONST,
     CHAR_CONST,
     STRING_CONST,
     /* 关键字 */
-    KW_INT, KW_FLOAT, KW_CHAR,
+    KW_INT, KW_FLOAT, KW_CHAR, KW_LONG,
     KW_IF, KW_ELSE,
     KW_WHILE, KW_FOR,
     KW_RETURN, KW_BREAK, KW_CONTINUE,
@@ -39,6 +40,8 @@ enum token_kind {
     RP,         /* )  */
     LB,         /* {  */
     RB,         /* }  */
+    LSQUARE,    /* [  */
+    RSQUARE,    /* ]  */
     SEMI,       /* ;  */
     COMMA,      /* ,  */
     HASH,       /* #  */
@@ -53,7 +56,7 @@ enum token_kind {
 
 /* ===== 全局变量（文档要求） ===== */
 extern char token_text[TOKEN_TEXT_LEN];  /* 当前单词自身字符串 */
-extern FILE* fp_src;                      /* 源文件指针 */
+extern FILE *fp_src;                      /* 源文件指针 */
 extern int  line_no;                      /* 当前行号，用于报错 */
 
 /* ===== 函数声明 ===== */
