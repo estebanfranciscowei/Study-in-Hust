@@ -1,16 +1,15 @@
 #include "parser.h"
-#include "lex.h"
+#include "lexer.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 
-/* ===== 全局变量定义 ===== */
+/*  全局变量定义  */
 int w;
 int parse_err = 0;
+int parse_error_total = 0;  /* 语法错误总数 */
 
-/* ================================================================
- * ===== 表达式分析：运算符栈 + 操作数栈 + 优先关系矩阵 =====
- * ================================================================ */
+/* ---表达式分析：运算符栈 + 操作数栈 + 优先关系矩阵 --- */
 
 #define STACK_SIZE 256
 
@@ -20,6 +19,7 @@ typedef struct {
     int      op_stack[STACK_SIZE];
     int      operand_top;
     int      op_top;
+    int      expect_operand;   /* 1=期望操作数, 0=期望运算符 */
 } ExprContext;
 
 /* 运算符优先级：数值越大优先级越高 */
@@ -77,12 +77,12 @@ static void reduce(ExprContext *ctx)
 
     if (op == NOT) {
         /* 单目运算符 */
-        if (ctx->operand_top < 1) { parse_err = 1; return; }
+        if (ctx->operand_top < 1) { parse_err = 1; parse_error_total++; return; }
         AstNode *operand = ctx->operand_stack[--ctx->operand_top];
         ctx->operand_stack[ctx->operand_top++] = ast_new_unary_op(op, operand);
     } else {
         /* 双目运算符 */
-        if (ctx->operand_top < 2) { parse_err = 1; return; }
+        if (ctx->operand_top < 2) { parse_err = 1; parse_error_total++; return; }
         AstNode *right = ctx->operand_stack[--ctx->operand_top];
         AstNode *left  = ctx->operand_stack[--ctx->operand_top];
         ctx->operand_stack[ctx->operand_top++] = ast_new_expr_op(op, left, right);
@@ -149,20 +149,20 @@ static AstNode* parse_operand(void)
             if (w == RP) {
                 w = gettoken();  /* 跳过RP */
             } else {
-                printf("[语法错误 line:%d] 函数调用缺少右括号\n", line_no);
-                parse_err = 1;
+                printf("[语法错误 line:%d] 函数调用缺少右括号\n", prev_token_line);
+                parse_err = 1; parse_error_total++;
             }
             return ast_new_func_call(name, arg_list);
         }
         if (w == LSQUARE) {
             /* 数组下标访问 a[i] */
-            w = gettoken();  /* 跳过[ */
-            AstNode *index = Exp(RSQUARE);  /* 解析下标表达式到] */
+            w = gettoken();  /* 跳过 [ */
+            AstNode *index = Exp(RSQUARE);  /* 解析下标表达式到 ] */
             if (w == RSQUARE) {
-                w = gettoken();  /* 跳过] */
+                w = gettoken();  /* 跳过 ] */
             } else {
-                printf("[语法错误 line:%d] 数组下标缺少右中括号\n", line_no);
-                parse_err = 1;
+                printf("[语法错误 line:%d] 数组下标缺少右中括号\n", prev_token_line);
+                parse_err = 1; parse_error_total++;
             }
             return ast_new_array_access(name, index);
         }
@@ -171,21 +171,31 @@ static AstNode* parse_operand(void)
     }
 
     if (w == INT_CONST) {
+        char text_buf[128];
+        strncpy(text_buf, token_text, sizeof(text_buf) - 1);
+        text_buf[sizeof(text_buf) - 1] = '\0';
         long v = atol(token_text);
         w = gettoken();
-        return ast_new_int_const(v);
+        return ast_new_int_const(v, text_buf);
     }
 
     if (w == LONG_CONST) {
+        char text_buf[128];
+        strncpy(text_buf, token_text, sizeof(text_buf) - 1);
+        text_buf[sizeof(text_buf) - 1] = '\0';
         long v = atol(token_text);
         w = gettoken();
-        return ast_new_int_const(v);
+        return ast_new_int_const(v, text_buf);
     }
 
+
     if (w == FLOAT_CONST) {
+        char text_buf[128];
+        strncpy(text_buf, token_text, sizeof(text_buf) - 1);
+        text_buf[sizeof(text_buf) - 1] = '\0';
         double v = atof(token_text);
         w = gettoken();
-        return ast_new_float_const(v);
+        return ast_new_float_const(v, text_buf);
     }
 
     if (w == CHAR_CONST) {
@@ -208,15 +218,15 @@ static AstNode* parse_operand(void)
         return ast_new_unary_op(op, operand);
     }
 
-    printf("[语法错误 line:%d] 意外的token '%s'，期望操作数\n", line_no, token_text);
-    parse_err = 1;
+    printf("[语法错误 line:%d] 意外的token '%s'，期望操作数\n", token_line, token_text);
+    parse_err = 1; parse_error_total++;
     return NULL;
 }
 
 /*
- * 表达式分析：运算符优先分析法
  * endsym: 表达式结束符号（如SEMI、RP、COMMA）
  * 遇到 endsym / RP / TOKEN_EOF / RB / SEMI 时停止
+ * 使用运算符优先分析法解析表达式，生成表达式AST
  */
 AstNode* Exp(int endsym)
 {
@@ -224,12 +234,30 @@ AstNode* Exp(int endsym)
     ExprContext ctx;
     ctx.operand_top = 0;
     ctx.op_top = 0;
+    ctx.expect_operand = 1;   /* 表达式以操作数开头 */
     ctx.op_stack[ctx.op_top++] = TOKEN_EOF;  /* 栈底标记 */
 
     while (!parse_err) {
-        /* 停止条件：注意RP不在此列，RP由主循环处理括号归约
-         * 只有当endsym本身就是RP时（如if条件），w==endsym会触发停止 */
-        if (w == endsym || w == TOKEN_EOF || w == RB || w == SEMI) {
+        /* 停止条件：
+         * - TOKEN_EOF/RB/SEMI 直接停止
+         * - endsym为RP时，不在这里停止，由下面的RP分支根据栈中是否有LP判断
+         *   （栈中有LP说明是内层括号，应归约处理；无LP说明是外层结束符，停止）
+         * - endsym为其他（如COMMA）时，w==endsym停止 */
+        if (w == TOKEN_EOF || w == RB || w == SEMI) {
+            break;
+        }
+        if (w == endsym && endsym != RP) {
+            break;
+        }
+        /* 表达式结束场景（endsym==SEMI或RP等）：刚解析完一个完整操作数
+         * （expect_operand==0）又遇到新的操作数开头，说明表达式缺少结束符
+         * （缺分号或缺右括号），应停止让上层报错。
+         * 注意：MINUS/NOT 在操作数栈非空时是双目运算符，不在此列 */
+        if (!ctx.expect_operand &&
+            (w == IDENT || w == INT_CONST || w == LONG_CONST || w == FLOAT_CONST ||
+             w == CHAR_CONST || w == STRING_CONST ||
+             (w == MINUS && ctx.operand_top == 0) ||
+             (w == NOT && ctx.operand_top == 0))) {
             break;
         }
 
@@ -237,10 +265,11 @@ AstNode* Exp(int endsym)
             /* 左括号：直接入运算符栈 */
             if (ctx.op_top >= STACK_SIZE) {
                 printf("[语法错误] 表达式过于复杂\n");
-                parse_err = 1;
+                parse_err = 1; parse_error_total++;
                 break;
             }
             ctx.op_stack[ctx.op_top++] = LP;
+            ctx.expect_operand = 1;   /* 括号内以操作数开头 */
             w = gettoken();
         } else if (w == RP) {
             /* 右括号：先检查栈中是否有本层的LP */
@@ -255,8 +284,8 @@ AstNode* Exp(int endsym)
             /* 栈中有LP，归约直到左括号 */
             while (ctx.op_stack[ctx.op_top - 1] != LP) {
                 if (ctx.op_stack[ctx.op_top - 1] == TOKEN_EOF) {
-                    printf("[语法错误 line:%d] 缺少左括号\n", line_no);
-                    parse_err = 1;
+                    printf("[语法错误 line:%d] 缺少左括号\n", token_line);
+                    parse_err = 1; parse_error_total++;
                     break;
                 }
                 reduce(&ctx);
@@ -264,6 +293,7 @@ AstNode* Exp(int endsym)
             }
             if (parse_err) break;
             ctx.op_top--;  /* 弹出LP */
+            ctx.expect_operand = 0;   /* 括号表达式结束，期望运算符 */
             w = gettoken();
         } else if (is_operand_start(w)) {
             /* MINUS/NOT 在操作数栈非空时是双目运算符，不是单目 */
@@ -275,20 +305,22 @@ AstNode* Exp(int endsym)
                 if (parse_err) break;
                 if (ctx.op_top >= STACK_SIZE) {
                     printf("[语法错误] 表达式过于复杂\n");
-                    parse_err = 1;
+                    parse_err = 1; parse_error_total++;
                     break;
                 }
                 ctx.op_stack[ctx.op_top++] = w;
+                ctx.expect_operand = 1;   /* 双目运算符后期望操作数 */
                 w = gettoken();
             } else {
                 AstNode *operand = parse_operand();
                 if (!operand) break;
                 if (ctx.operand_top >= STACK_SIZE) {
                     printf("[语法错误] 表达式过于复杂\n");
-                    parse_err = 1;
+                    parse_err = 1; parse_error_total++;
                     break;
                 }
                 ctx.operand_stack[ctx.operand_top++] = operand;
+                ctx.expect_operand = 0;   /* 操作数结束，期望运算符 */
             }
         } else if (is_operator(w)) {
             while (precede(ctx.op_stack[ctx.op_top - 1], w) == '>') {
@@ -298,13 +330,14 @@ AstNode* Exp(int endsym)
             if (parse_err) break;
             if (ctx.op_top >= STACK_SIZE) {
                 printf("[语法错误] 表达式过于复杂\n");
-                parse_err = 1;
+                parse_err = 1; parse_error_total++;
                 break;
             }
             ctx.op_stack[ctx.op_top++] = w;
+            ctx.expect_operand = 1;   /* 运算符后期望操作数 */
             w = gettoken();
         } else {
-            printf("[语法错误 line:%d] 表达式中出现意外token '%s'\n", line_no, token_text);
+            /* 意外token：通常是缺少分号或右括号，设置错误标志，由上层报告具体错误 */
             parse_err = 1;
             break;
         }
@@ -313,8 +346,8 @@ AstNode* Exp(int endsym)
     /* 归约剩余运算符 */
     while (!parse_err && ctx.op_stack[ctx.op_top - 1] != TOKEN_EOF) {
         if (ctx.op_stack[ctx.op_top - 1] == LP) {
-            printf("[语法错误 line:%d] 缺少右括号\n", line_no);
-            parse_err = 1;
+            printf("[语法错误 line:%d] 缺少右括号\n", token_line);
+            parse_err = 1; parse_error_total++;
             break;
         }
         reduce(&ctx);
@@ -327,11 +360,9 @@ AstNode* Exp(int endsym)
     return ctx.operand_stack[ctx.operand_top - 1];
 }
 
-/* ================================================================
- * ===== 递归下降语法分析 =====
- * ================================================================ */
+/* 递归下降语法分析  */
 
-/* <程序> ::= <外部定义序列> */
+
 AstNode* Program(void)
 {
     w = gettoken();
@@ -343,13 +374,37 @@ AstNode* Program(void)
     return ast_new_prog(ext_list);
 }
 
-/* <外部定义序列> ::= <外部定义> <外部定义序列> | ε */
+ /* 错误时，跳到下一个分号或文件结束，清除错误标志继续分析 */
+ /* 功能：语法错误恢复，跳过当前错误语句到下一个分号，清除错误标志继续分析*/
+static void sync_recover(void)
+{
+    int guard = 0;  /* 保护，防止无限循环 */
+    while (w != TOKEN_EOF && w != SEMI && guard < 1000) {
+        w = gettoken();
+        guard++;
+    }
+    if (w == SEMI) {
+        w = gettoken();  /* 跳过分号，继续下一条语句/定义 */
+    }
+    parse_err = 0;  /* 清除错误标志，继续分析 */
+}
+
+
 AstNode* ExtDefList(void)
 {
     if (w == TOKEN_EOF) return NULL;
 
     AstNode *def = ExtDef();
-    if (!def) return NULL;
+    if (!def) {
+        /* 错误恢复：跳过到同步token（分号或右大括号），继续分析 */
+        if (parse_err) {
+            sync_recover();
+            if (w != TOKEN_EOF) {
+                return ExtDefList();  /* 继续下一个外部定义 */
+            }
+        }
+        return NULL;
+    }
 
     AstNode *next = ExtDefList();
     if (next) {
@@ -364,13 +419,17 @@ static int is_type_keyword(int tk)
     return tk == KW_INT || tk == KW_FLOAT || tk == KW_CHAR || tk == KW_LONG || tk == KW_VOID;
 }
 
-/* <外部定义> ::= <类型> <标识符> (<变量序列>; | <函数定义>) */
+ /* <外部定义> ::= <类型> <标识符> (<变量序列>; | <函数定义>) */
+ /*
+ * 解析一个外部定义（外部变量定义、函数定义或函数声明）
+ * w必须是类型关键字(int/float/char/long/void)
+ */
 AstNode* ExtDef(void)
 {
     if (!is_type_keyword(w)) {
         printf("[语法错误 line:%d] 外部定义需要以类型关键字开头，实际是 '%s'\n",
-               line_no, token_name(w));
-        parse_err = 1;
+               token_line, token_name(w));
+        parse_err = 1; parse_error_total++;
         return NULL;
     }
 
@@ -378,8 +437,8 @@ AstNode* ExtDef(void)
     w = gettoken();
 
     if (w != IDENT) {
-        printf("[语法错误 line:%d] 期望标识符，实际是 '%s'\n", line_no, token_name(w));
-        parse_err = 1;
+        printf("[语法错误 line:%d] 期望标识符，实际是 '%s'\n", token_line, token_name(w));
+        parse_err = 1; parse_error_total++;
         ast_free(type_node);
         return NULL;
     }
@@ -394,8 +453,8 @@ AstNode* ExtDef(void)
         w = gettoken();  /* 跳过LP */
         AstNode *param_list = ParamList();
         if (w != RP) {
-            printf("[语法错误 line:%d] 函数定义缺少右括号\n", line_no);
-            parse_err = 1;
+            printf("[语法错误 line:%d] 函数定义缺少右括号\n", prev_token_line);
+            parse_err = 1; parse_error_total++;
             ast_free(type_node);
             ast_free(param_list);
             return NULL;
@@ -410,8 +469,8 @@ AstNode* ExtDef(void)
 
         if (w != LB) {
             printf("[语法错误 line:%d] 函数定义缺少左大括号，实际是 '%s'\n",
-                   line_no, token_name(w));
-            parse_err = 1;
+                   token_line, token_name(w));
+            parse_err = 1; parse_error_total++;
             ast_free(type_node);
             ast_free(param_list);
             return NULL;
@@ -424,8 +483,8 @@ AstNode* ExtDef(void)
         AstNode *var_list = VarList(name);
         if (w != SEMI) {
             printf("[语法错误 line:%d] 外部变量定义缺少分号，实际是 '%s'\n",
-                   line_no, token_name(w));
-            parse_err = 1;
+                   prev_token_line, token_name(w));
+            parse_err = 1; parse_error_total++;
             ast_free(type_node);
             ast_free(var_list);
             return NULL;
@@ -435,10 +494,9 @@ AstNode* ExtDef(void)
     }
 }
 
-/* <变量声明序列> ::= <变量声明>(,<变量声明>)*
- * first_name: 调用者已经预读的第一个变量名（不为NULL时先处理它）
- * 进入时：如果first_name不为NULL，w是该变量名后面的token；
- *         如果first_name为NULL，w应该是IDENT */
+/*  first_name: 调用者已经预读的第一个变量名（不为NULL时先处理它）
+  进入时：如果first_name不为NULL，w是该变量名后面的token；
+  如果first_name为NULL，w应该是IDENT */
 AstNode* VarList(const char *first_name)
 {
     AstNode *first = NULL;
@@ -457,14 +515,14 @@ AstNode* VarList(const char *first_name)
                 arr_size = atoi(token_text);
                 w = gettoken();
             } else {
-                printf("[语法错误 line:%d] 数组大小需要整型常量\n", line_no);
-                parse_err = 1;
+                printf("[语法错误 line:%d] 数组大小需要整型常量\n", token_line);
+                parse_err = 1; parse_error_total++;
             }
             if (w == RSQUARE) {
                 w = gettoken();  /* 跳过] */
             } else {
-                printf("[语法错误 line:%d] 数组声明缺少右中括号\n", line_no);
-                parse_err = 1;
+                printf("[语法错误 line:%d] 数组声明缺少右中括号\n", prev_token_line);
+                parse_err = 1; parse_error_total++;
             }
         }
         if (w == ASSIGN) {
@@ -485,8 +543,8 @@ AstNode* VarList(const char *first_name)
         w = gettoken();  /* 跳过逗号 */
         if (w != IDENT) {
             printf("[语法错误 line:%d] 变量声明中期望标识符，实际是 '%s'\n",
-                   line_no, token_name(w));
-            parse_err = 1;
+                   token_line, token_name(w));
+            parse_err = 1; parse_error_total++;
             break;
         }
         char name[128];
@@ -505,14 +563,14 @@ AstNode* VarList(const char *first_name)
                 arr_size = atoi(token_text);
                 w = gettoken();
             } else {
-                printf("[语法错误 line:%d] 数组大小需要整型常量\n", line_no);
-                parse_err = 1;
+                printf("[语法错误 line:%d] 数组大小需要整型常量\n", token_line);
+                parse_err = 1; parse_error_total++;
             }
             if (w == RSQUARE) {
                 w = gettoken();  /* 跳过] */
             } else {
-                printf("[语法错误 line:%d] 数组声明缺少右中括号\n", line_no);
-                parse_err = 1;
+                printf("[语法错误 line:%d] 数组声明缺少右中括号\n", prev_token_line);
+                parse_err = 1; parse_error_total++;
             }
         }
         if (w == ASSIGN) {
@@ -527,13 +585,12 @@ AstNode* VarList(const char *first_name)
             decl = ast_new_var_decl(name, init_expr);
         if (!first) first = decl;
         else last->next_sibling = decl;
-        last = decl;
+        last = decl; 
     }
 
     return ast_new_var_list(first);
 }
 
-/* <形参列表> ::= <形参>(,<形参>)* | ε */
 AstNode* ParamList(void)
 {
     if (w == RP) {
@@ -545,8 +602,8 @@ AstNode* ParamList(void)
 
     while (w != RP && w != TOKEN_EOF && !parse_err) {
         if (!is_type_keyword(w)) {
-            printf("[语法错误 line:%d] 形参需要类型，实际是 '%s'\n", line_no, token_name(w));
-            parse_err = 1;
+            printf("[语法错误 line:%d] 形参需要类型，实际是 '%s'\n", token_line, token_name(w));
+            parse_err = 1; parse_error_total++;
             break;
         }
         int param_type = w;
@@ -560,8 +617,8 @@ AstNode* ParamList(void)
         }
 
         if (w != IDENT) {
-            printf("[语法错误 line:%d] 形参需要标识符\n", line_no);
-            parse_err = 1;
+            printf("[语法错误 line:%d] 形参需要标识符\n", token_line);
+            parse_err = 1; parse_error_total++;
             ast_free(type_node);
             break;
         }
@@ -585,7 +642,6 @@ AstNode* ParamList(void)
     return ast_new_param_list(first);
 }
 
-/* <复合语句> ::= { <局部声明序列> <语句序列> } */
 AstNode* Compound(void)
 {
     /* 进入时w == LB */
@@ -600,8 +656,8 @@ AstNode* Compound(void)
         w = gettoken();
 
         if (w != IDENT) {
-            printf("[语法错误 line:%d] 局部变量声明需要标识符\n", line_no);
-            parse_err = 1;
+            printf("[语法错误 line:%d] 局部变量声明需要标识符\n", token_line);
+            parse_err = 1; parse_error_total++;
             ast_free(type_node);
             break;
         }
@@ -612,8 +668,8 @@ AstNode* Compound(void)
 
         AstNode *var_list = VarList(local_name);
         if (w != SEMI) {
-            printf("[语法错误 line:%d] 局部变量声明缺少分号\n", line_no);
-            parse_err = 1;
+            printf("[语法错误 line:%d] 局部变量声明缺少分号\n", prev_token_line);
+            parse_err = 1; parse_error_total++;
             ast_free(type_node);
             ast_free(var_list);
             break;
@@ -624,6 +680,7 @@ AstNode* Compound(void)
         if (!first_local) first_local = local_decl;
         else last_local->next_sibling = local_decl;
         last_local = local_decl;
+        if (parse_err) break;  /* 声明解析出错，停止避免连锁错误 */
     }
 
     /* 解析语句序列 */
@@ -632,8 +689,8 @@ AstNode* Compound(void)
     /* 期望RB */
     if (w != RB) {
         printf("[语法错误 line:%d] 复合语句缺少右大括号，实际是 '%s'\n",
-               line_no, token_name(w));
-        parse_err = 1;
+               prev_token_line, token_name(w));
+        parse_err = 1; parse_error_total++;
     } else {
         w = gettoken();  /* 跳过RB */
     }
@@ -641,39 +698,51 @@ AstNode* Compound(void)
     return ast_new_compound(first_local, stmt_list);
 }
 
-/* <语句序列> ::= <语句>* */
+
 AstNode* StmtList(void)
 {
     AstNode *first = NULL;
     AstNode *last = NULL;
 
-    while (w != RB && w != TOKEN_EOF && !parse_err) {
+    while (w != RB && w != TOKEN_EOF) {
         AstNode *stmt = Statement();
-        if (!stmt) break;
-        if (!first) first = stmt;
-        else last->next_sibling = stmt;
-        last = stmt;
+        if (stmt) {
+            if (parse_err) {
+                /* 语句返回了但内部有错误(如if-else的else子句失败)，进行错误恢复 */
+                sync_recover();
+            }
+            if (!first) first = stmt;
+            else last->next_sibling = stmt;
+            last = stmt;
+        } else if (parse_err) {
+            /* 错误恢复：跳过本语句，继续分析后面的语句 */
+            sync_recover();
+        } else {
+            break;
+        }
     }
 
     return ast_new_stmt_list(first);
 }
 
-/* <语句> ::= 各种语句 */
+ /* 解析一条语句（if/while/for/return/break/continue/表达式/复合语句）
+   根据w的类型判断语句种类*/
 AstNode* Statement(void)
 {
+    if (parse_err) return NULL;  /* 前面已有错误，直接返回，避免级联报错 */
     switch (w) {
         case KW_IF: {
             w = gettoken();  /* 跳过if */
             if (w != LP) {
-                printf("[语法错误 line:%d] if语句缺少左括号\n", line_no);
-                parse_err = 1;
+                printf("[语法错误 line:%d] if语句缺少左括号\n", token_line);
+                parse_err = 1; parse_error_total++;
                 return NULL;
             }
             w = gettoken();  /* 跳过LP */
             AstNode *cond = Exp(RP);
             if (w != RP) {
-                printf("[语法错误 line:%d] if条件缺少右括号\n", line_no);
-                parse_err = 1;
+                printf("[语法错误 line:%d] if条件缺少右括号\n", prev_token_line);
+                parse_err = 1; parse_error_total++;
                 ast_free(cond);
                 return NULL;
             }
@@ -685,6 +754,7 @@ AstNode* Statement(void)
             if (w == KW_ELSE) {
                 w = gettoken();  /* 跳过else */
                 AstNode *else_stmt = Statement();
+                if (!else_stmt) return NULL;  /* else子句解析失败 */
                 return ast_new_if_else(cond, then_stmt, else_stmt);
             }
             return ast_new_if(cond, then_stmt);
@@ -693,56 +763,58 @@ AstNode* Statement(void)
         case KW_WHILE: {
             w = gettoken();
             if (w != LP) {
-                printf("[语法错误 line:%d] while语句缺少左括号\n", line_no);
-                parse_err = 1;
+                printf("[语法错误 line:%d] while语句缺少左括号\n", token_line);
+                parse_err = 1; parse_error_total++;
                 return NULL;
             }
             w = gettoken();
             AstNode *cond = Exp(RP);
             if (w != RP) {
-                printf("[语法错误 line:%d] while条件缺少右括号\n", line_no);
-                parse_err = 1;
+                printf("[语法错误 line:%d] while条件缺少右括号\n", prev_token_line);
+                parse_err = 1; parse_error_total++;
                 ast_free(cond);
                 return NULL;
             }
             w = gettoken();
             AstNode *body = Statement();
+            if (!body) return NULL;  /* 循环体解析失败 */
             return ast_new_while(cond, body);
         }
 
         case KW_FOR: {
             w = gettoken();
             if (w != LP) {
-                printf("[语法错误 line:%d] for语句缺少左括号\n", line_no);
-                parse_err = 1;
+                printf("[语法错误 line:%d] for语句缺少左括号\n", token_line);
+                parse_err = 1; parse_error_total++;
                 return NULL;
             }
             w = gettoken();
             /* init表达式 */
             AstNode *init = (w == SEMI) ? ast_new_empty() : Exp(SEMI);
             if (w != SEMI) {
-                printf("[语法错误 line:%d] for语句第一个分号缺失\n", line_no);
-                parse_err = 1;
+                printf("[语法错误 line:%d] for语句第一个分号缺失\n", token_line);
+                parse_err = 1; parse_error_total++;
                 return NULL;
             }
             w = gettoken();
             /* cond表达式 */
             AstNode *cond = (w == SEMI) ? ast_new_empty() : Exp(SEMI);
             if (w != SEMI) {
-                printf("[语法错误 line:%d] for语句第二个分号缺失\n", line_no);
-                parse_err = 1;
+                printf("[语法错误 line:%d] for语句第二个分号缺失\n", token_line);
+                parse_err = 1; parse_error_total++;
                 return NULL;
             }
             w = gettoken();
             /* step表达式 */
             AstNode *step = (w == RP) ? ast_new_empty() : Exp(RP);
             if (w != RP) {
-                printf("[语法错误 line:%d] for语句缺少右括号\n", line_no);
-                parse_err = 1;
+                printf("[语法错误 line:%d] for语句缺少右括号\n", prev_token_line);
+                parse_err = 1; parse_error_total++;
                 return NULL;
             }
             w = gettoken();
             AstNode *body = Statement();
+            if (!body) return NULL;  /* 循环体解析失败 */
             return ast_new_for(init, cond, step, body);
         }
 
@@ -755,8 +827,8 @@ AstNode* Statement(void)
                 expr = ast_new_empty();
             }
             if (w != SEMI) {
-                printf("[语法错误 line:%d] return语句缺少分号\n", line_no);
-                parse_err = 1;
+                printf("[语法错误 line:%d] return语句缺少分号\n", prev_token_line);
+                parse_err = 1; parse_error_total++;
                 ast_free(expr);
                 return NULL;
             }
@@ -767,8 +839,8 @@ AstNode* Statement(void)
         case KW_BREAK: {
             w = gettoken();
             if (w != SEMI) {
-                printf("[语法错误 line:%d] break语句缺少分号\n", line_no);
-                parse_err = 1;
+                printf("[语法错误 line:%d] break语句缺少分号\n", prev_token_line);
+                parse_err = 1; parse_error_total++;
                 return NULL;
             }
             w = gettoken();
@@ -778,8 +850,8 @@ AstNode* Statement(void)
         case KW_CONTINUE: {
             w = gettoken();
             if (w != SEMI) {
-                printf("[语法错误 line:%d] continue语句缺少分号\n", line_no);
-                parse_err = 1;
+                printf("[语法错误 line:%d] continue语句缺少分号\n", prev_token_line);
+                parse_err = 1; parse_error_total++;
                 return NULL;
             }
             w = gettoken();
@@ -797,22 +869,38 @@ AstNode* Statement(void)
         }
 
         default: {
+            /* 孤立的else：前面if语句的else子句未被消费，跳过else和后面的语句 */
+            if (w == KW_ELSE) {
+    			printf("[语法错误 line:%d] else没有对应的if语句\n", token_line);
+    			parse_err = 1;
+			    parse_error_total++;
+			    w = gettoken();      /* 跳过else */
+			    Statement();          /* 跳过else子句(忽略返回值) */
+			    return ast_new_empty();  /* 返回空结点，避免影响上层分析 */
+				}
             /* 表达式语句 */
             if (is_operand_start(w) || w == LP) {
                 AstNode *expr = Exp(SEMI);
-                if (!expr) return NULL;
+                if (!expr) {
+                    if (parse_err) {
+                        printf("[语法错误 line:%d] 表达式语句缺少分号，实际是 '%s'\n",
+                               prev_token_line, token_name(w));
+                        parse_error_total++;
+                    }
+                    return NULL;
+                }
                 if (w != SEMI) {
                     printf("[语法错误 line:%d] 表达式语句缺少分号，实际是 '%s'\n",
-                           line_no, token_name(w));
-                    parse_err = 1;
+                           prev_token_line, token_name(w));
+                    parse_err = 1; parse_error_total++;
                     ast_free(expr);
                     return NULL;
                 }
                 w = gettoken();
                 return ast_new_expr_stmt(expr);
             }
-            printf("[语法错误 line:%d] 未知语句开头 '%s'\n", line_no, token_name(w));
-            parse_err = 1;
+            printf("[语法错误 line:%d] 未知语句开头 '%s'\n", token_line, token_name(w));
+            parse_err = 1; parse_error_total++;
             return NULL;
         }
     }

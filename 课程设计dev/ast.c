@@ -3,7 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* ===== 内部工具：分配结点 ===== */
+/*  内部工具：分配结点  */
 static AstNode* alloc_node(AstNodeType t)
 {
     AstNode *p = (AstNode*)malloc(sizeof(AstNode));
@@ -15,7 +15,7 @@ static AstNode* alloc_node(AstNodeType t)
     return p;
 }
 
-/* ===== 结点创建函数 ===== */
+/*  结点创建函数  */
 AstNode* ast_new_prog(AstNode *ext_list)
 {
     AstNode *n = alloc_node(AST_PROG);
@@ -42,10 +42,10 @@ AstNode* ast_new_func_def(AstNode *ret_type, const char *name,
                            AstNode *param_list, AstNode *body)
 {
     AstNode *n = alloc_node(AST_FUNC_DEF);
-    strncpy(n->u.id_name, name, sizeof(n->u.id_name) - 1);
-    n->first_child = ret_type;
-    if (ret_type) ret_type->next_sibling = param_list;
-    if (param_list) param_list->next_sibling = body;
+    strncpy(n->u.id_name, name, sizeof(n->u.id_name) - 1);  // 存函数名
+    n->first_child = ret_type;                           // 第一个孩子：返回类型
+    if (ret_type) ret_type->next_sibling = param_list;   // 类型的兄弟：形参列表
+    if (param_list) param_list->next_sibling = body;     // 形参的兄弟：函数体
     return n;
 }
 
@@ -226,17 +226,19 @@ AstNode* ast_new_ident(const char *name)
     return n;
 }
 
-AstNode* ast_new_int_const(long v)
+AstNode* ast_new_int_const(long v, const char *text)
 {
     AstNode *n = alloc_node(AST_INT_CONST);
     n->u.int_val = v;
+    if (text) strncpy(n->u.id_name, text, sizeof(n->u.id_name) - 1);
     return n;
 }
 
-AstNode* ast_new_float_const(double v)
+AstNode* ast_new_float_const(double v, const char *text)
 {
     AstNode *n = alloc_node(AST_FLOAT_CONST);
     n->u.float_val = v;
+    if (text) strncpy(n->u.id_name, text, sizeof(n->u.id_name) - 1);
     return n;
 }
 
@@ -266,7 +268,7 @@ AstNode* ast_new_empty(void)
     return alloc_node(AST_EMPTY);
 }
 
-/* ===== 添加兄弟结点 ===== */
+/*  添加兄弟结点  */
 void ast_add_sibling(AstNode *node, AstNode *sib)
 {
     if (!node || !sib) return;
@@ -274,13 +276,13 @@ void ast_add_sibling(AstNode *node, AstNode *sib)
     node->next_sibling = sib;
 }
 
-/* ===== 打印缩进 ===== */
+/*  打印缩进  */
 static void print_ind(int n)
 {
     for (int i = 0; i < n; i++) printf("  ");
 }
 
-/* ===== 先根遍历打印AST（任务书示例格式） ===== */
+/*  先根遍历打印AST  */
 static void print_type_name(AstNode *type_node)
 {
     if (!type_node) return;
@@ -602,7 +604,7 @@ void ast_print(AstNode *root, int indent)
     }
 }
 
-/* ===== 释放整棵树 ===== */
+/*  释放整棵树  */
 void ast_free(AstNode *root)
 {
     if (!root) return;
@@ -611,9 +613,7 @@ void ast_free(AstNode *root)
     free(root);
 }
 
-/* ================================================================
- * ===== 格式化输出：遍历AST输出格式化C源码 =====
- * ================================================================ */
+/* 格式化输出：遍历AST输出格式化C源码  */
 
 static int g_indent = 0;  /* 当前缩进级别 */
 
@@ -630,6 +630,7 @@ static void gen_type(AstNode *type_node, FILE *fp)
         case KW_INT:   fprintf(fp, "int");    break;
         case KW_FLOAT: fprintf(fp, "float");  break;
         case KW_CHAR:  fprintf(fp, "char");   break;
+        case KW_LONG:  fprintf(fp, "long");   break;
         case KW_VOID:  fprintf(fp, "void");   break;
         default:       fprintf(fp, "int");
     }
@@ -644,10 +645,10 @@ static void gen_expr(AstNode *expr, FILE *fp)
             fprintf(fp, "%s", expr->u.id_name);
             break;
         case AST_INT_CONST:
-            fprintf(fp, "%ld", expr->u.int_val);
+            fprintf(fp, "%s", expr->u.id_name);
             break;
         case AST_FLOAT_CONST:
-            fprintf(fp, "%g", expr->u.float_val);
+            fprintf(fp, "%s", expr->u.id_name);
             break;
         case AST_CHAR_CONST:
             fprintf(fp, "%s", expr->u.char_val);
@@ -673,7 +674,7 @@ static void gen_expr(AstNode *expr, FILE *fp)
                 case MINUS:  op_str = " - ";   break;
                 case MUL:    op_str = " * ";   break;
                 case DIV:    op_str = " / ";   break;
-                case MOD:    op_str = " %% ";  break;
+            	case MOD:    op_str = " % ";   break;
                 case ASSIGN: op_str = " = ";   break;
                 case EQ:     op_str = " == ";  break;
                 case NEQ:    op_str = " != ";  break;
@@ -911,7 +912,7 @@ static void gen_stmt(AstNode *stmt, FILE *fp, int indent)
     }
 }
 
-/* ===== 格式化输出主入口 ===== */
+/*  格式化输出主入口  */
 void ast_gen_format(AstNode *root, FILE *fp_out)
 {
     if (!root || !fp_out) return;

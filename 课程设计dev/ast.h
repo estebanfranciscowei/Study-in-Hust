@@ -1,7 +1,7 @@
 #ifndef __AST_H__
 #define __AST_H__
 
-#include "lex.h"
+#include "lexer.h"
 
 /* ===== AST 结点类型枚举 ===== */
 typedef enum {
@@ -39,7 +39,7 @@ typedef enum {
     AST_EMPTY           /* 空结点(用于for空表达式等) */
 } AstNodeType;
 
-/* ===== AST 结点：结构体 + 共用体 union（文档强制要求） ===== */
+/*  AST 结点：结构体 + union  */
 typedef struct AstNode {
     AstNodeType type;
     union {
@@ -56,7 +56,7 @@ typedef struct AstNode {
     struct AstNode *next_sibling; /* 下一个兄弟 */
 } AstNode;
 
-/* ===== 结点创建函数 ===== */
+/*  结点创建函数  */
 AstNode* ast_new_prog(AstNode *ext_list);
 AstNode* ast_new_ext_def_list(AstNode *first);
 AstNode* ast_new_ext_var_def(AstNode *type_node, AstNode *var_list);
@@ -85,19 +85,19 @@ AstNode* ast_new_array_decl(const char *name, int size, AstNode *init_expr);
 AstNode* ast_new_array_access(const char *name, AstNode *index);
 AstNode* ast_new_arg_list(AstNode *first);
 AstNode* ast_new_ident(const char *name);
-AstNode* ast_new_int_const(long v);
-AstNode* ast_new_float_const(double v);
+AstNode* ast_new_int_const(long v, const char *text);
+AstNode* ast_new_float_const(double v, const char *text);
 AstNode* ast_new_char_const(const char *text);
 AstNode* ast_new_string_const(const char *text);
 AstNode* ast_new_type(int tk);
 AstNode* ast_new_empty(void);
 
-/* ===== 树操作 ===== */
+/*  树操作  */
 void ast_add_sibling(AstNode *node, AstNode *sib);  /* 添加兄弟结点 */
 void ast_print(AstNode *root, int indent);            /* 先根遍历打印AST */
 void ast_free(AstNode *root);                          /* 释放整棵树 */
 
-/* ===== 格式化输出 ===== */
+/*  格式化输出  */
 void ast_gen_format(AstNode *root, FILE *fp_out);     /* 遍历AST输出格式化C源码 */
 
 #endif

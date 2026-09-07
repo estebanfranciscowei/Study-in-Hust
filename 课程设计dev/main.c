@@ -1,4 +1,4 @@
-#include "lex.h"
+#include "lexer.h"
 #include "parser.h"
 #include "ast.h"
 #include <stdio.h>
@@ -24,36 +24,37 @@ int main(int argc, char **argv)
     printf("  输入文件: %s\n", src_file);
     printf("==================================================\n\n");
 
-    /* ===== 第一部分：词法分析测试 ===== */
+    /*  词法分析测试  */
     printf("========== 【一、词法分析输出】 ==========\n");
     rewind(fp_src);
     line_no = 1;
+    lex_error_count = 0;
     int tk;
     int token_count = 0;
-    int lex_error = 0;
     while ((tk = gettoken()) != TOKEN_EOF) {
         print_token(tk);
         token_count++;
-        if (tk == ERROR_TOKEN) { lex_error = 1; break; }
     }
     printf("--------------------------------------------------\n");
     printf("共识别 %d 个单词", token_count);
-    if (lex_error) printf(" (含词法错误)");
+    if (lex_error_count > 0) printf(" (含 %d 个词法错误)", lex_error_count);
     printf("\n\n");
 
-    if (lex_error) {
-        printf("词法分析存在错误，终止语法分析。\n");
-        fclose(fp_src);
-        return 1;
-    }
-
-    /* ===== 第二部分：语法分析，构建AST ===== */
+    /* 语法分析，构建AST  */
     printf("========== 【二、语法分析 & 抽象语法树】 ==========\n");
     rewind(fp_src);
     line_no = 1;
     parse_err = 0;
+    parse_error_total = 0;
 
     AstNode *tree = Program();
+
+    if (parse_error_total > 0) {
+        printf("\n语法分析完成，共发现 %d 个语法错误。\n", parse_error_total);
+        ast_free(tree);
+        fclose(fp_src);
+        return 1;
+    }
 
     if (parse_err || !tree) {
         printf("\n语法分析失败，存在语法错误。\n");
@@ -67,7 +68,7 @@ int main(int argc, char **argv)
     ast_print(tree, 0);
     printf("\n");
 
-    /* ===== 第三部分：格式化输出 ===== */
+    /*  格式化输出  */
     printf("========== 【三、格式化输出】 ==========\n");
     const char *out_file = "out.c";
     FILE *fout = fopen(out_file, "w");
@@ -81,7 +82,7 @@ int main(int argc, char **argv)
     fclose(fout);
     printf("格式化源码已输出到文件: %s\n\n", out_file);
 
-    /* 同时在控制台显示格式化结果 */
+    /* 在控制台显示格式化结果 */
     printf("----- 格式化后的源码 -----\n");
     FILE *fshow = fopen(out_file, "r");
     if (fshow) {
@@ -93,7 +94,7 @@ int main(int argc, char **argv)
     }
     printf("\n");
 
-    /* ===== 清理 ===== */
+    /*  清理  */
     ast_free(tree);
     fclose(fp_src);
 
