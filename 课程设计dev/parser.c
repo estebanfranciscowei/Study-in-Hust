@@ -13,7 +13,7 @@ int parse_error_total = 0;  /* 语法错误总数 */
 
 #define STACK_SIZE 256
 
-/* 表达式分析上下文（栈改为局部，避免递归调用时互相覆盖） */
+/* 表达式分析上下文 */
 typedef struct {
     AstNode *operand_stack[STACK_SIZE];
     int      op_stack[STACK_SIZE];
@@ -389,11 +389,33 @@ static void sync_recover(void)
     parse_err = 0;  /* 清除错误标志，继续分析 */
 }
 
-
 AstNode* ExtDefList(void)
 {
     if (w == TOKEN_EOF) return NULL;
-
+	
+	    /* 处理预处理指令和注释（直接生成AST结点） */
+    if (w == PRE_INCLUDE) {
+        AstNode *node = ast_new_include(token_text);
+        w = gettoken();
+        AstNode *next = ExtDefList();
+        if (next) ast_add_sibling(node, next);
+        return ast_new_ext_def_list(node);
+    }
+    if (w == PRE_DEFINE) {
+        AstNode *node = ast_new_define(token_text);
+        w = gettoken();
+        AstNode *next = ExtDefList();
+        if (next) ast_add_sibling(node, next);
+        return ast_new_ext_def_list(node);
+    }
+    if (w == COMMENT) {
+        AstNode *node = ast_new_comment(token_text);
+        w = gettoken();
+        AstNode *next = ExtDefList();
+        if (next) ast_add_sibling(node, next);
+        return ast_new_ext_def_list(node);
+    }
+    
     AstNode *def = ExtDef();
     if (!def) {
         /* 错误恢复：跳过到同步token（分号或右大括号），继续分析 */
@@ -747,10 +769,11 @@ AstNode* Statement(void)
                 return NULL;
             }
             w = gettoken();  /* 跳过RP */
-
+			while (w == COMMENT) w = gettoken();  /* 跳过if条件和子句之间的注释 */
             AstNode *then_stmt = Statement();
             if (!then_stmt) return NULL;
-
+            
+            while (w == COMMENT) w = gettoken();  /* 跳过if子句和else之间的注释 */
             if (w == KW_ELSE) {
                 w = gettoken();  /* 跳过else */
                 AstNode *else_stmt = Statement();
@@ -776,6 +799,7 @@ AstNode* Statement(void)
                 return NULL;
             }
             w = gettoken();
+            while (w == COMMENT) w = gettoken();  /* 跳过while条件和循环体之间的注释 */
             AstNode *body = Statement();
             if (!body) return NULL;  /* 循环体解析失败 */
             return ast_new_while(cond, body);
@@ -813,6 +837,7 @@ AstNode* Statement(void)
                 return NULL;
             }
             w = gettoken();
+            while (w == COMMENT) w = gettoken();  /* 跳过for条件和循环体之间的注释 */
             AstNode *body = Statement();
             if (!body) return NULL;  /* 循环体解析失败 */
             return ast_new_for(init, cond, step, body);
@@ -862,12 +887,26 @@ AstNode* Statement(void)
             return Compound();
         }
 
-        case SEMI: {
-            /* 空语句 */
-            w = gettoken();
-            return ast_new_expr_stmt(ast_new_empty());
-        }
-
+		case SEMI: {
+		            /* 空语句 */
+		            w = gettoken();
+		            return ast_new_expr_stmt(ast_new_empty());
+		        }
+		case PRE_INCLUDE: {
+		            AstNode *node = ast_new_include(token_text);
+		            w = gettoken();
+		            return node;
+		        }
+		case PRE_DEFINE: {
+		            AstNode *node = ast_new_define(token_text);
+		            w = gettoken();
+		            return node;
+		        }
+		case COMMENT: {
+		            AstNode *node = ast_new_comment(token_text);
+		            w = gettoken();
+		            return node;
+		        }
         default: {
             /* 孤立的else：前面if语句的else子句未被消费，跳过else和后面的语句 */
             if (w == KW_ELSE) {

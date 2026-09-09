@@ -43,94 +43,71 @@ static int lookup_keyword(const char *s)
     return IDENT;
 }
 
-/* 跳过块注释（进入时已经读掉了 / 和 *） */
-static void skip_block_comment(void)
+/* 读取行注释内容（进入时已经读掉了 / 和 /），内容存进token_text */
+static void read_line_comment(void)
 {
     int c;
-    int prev = 0;
-    while ((c = fgetc(fp_src)) != EOF) {
-        if (c == '\n') line_no++;
-        if (prev == '*' && c == '/') break;
-        prev = c;
-    }
-}
-
-/* 跳过行注释（进入时已经读掉了 / 和 /） */
-static void skip_line_comment(void)
-{
-    int c;
-    while ((c = fgetc(fp_src)) != EOF && c != '\n')
-        ;
-    if (c == '\n') line_no++;
-}
-
-/* 处理预处理指令 #include / #define，并做简单语法检查 */
-static void skip_preprocessor(void)
-{
-    int c;
-    /* 读取 # 后面的指令名 */
-    char cmd[32] = {0};
     int idx = 0;
-    while ((c = fgetc(fp_src)) != EOF && isalpha(c) && idx < 31) {
-        cmd[idx++] = (char)c;
+    token_text[idx++] = '/';
+    token_text[idx++] = '/';
+    while ((c = fgetc(fp_src)) != EOF && c != '\n') {
+        if (idx < TOKEN_TEXT_LEN - 1)
+            token_text[idx++] = (char)c;
     }
-    ungetc(c, fp_src);
-
-    if (strcmp(cmd, "include") == 0) {
-        /* 跳过 include 后面的空格和制表符 */
-        while ((c = fgetc(fp_src)) != EOF && (c == ' ' || c == '\t'))
-            ;
-
-        /* 检查：#include 后面有没有文件名 */
-        if (c == '\n' || c == EOF) {
-            printf("[词法错误 line:%d] #include 缺少文件名\n", line_no);
-            lex_error_count++;
-            if (c == '\n') line_no++;
-            return;
-        }
-
-        /* 检查：文件名是否用 <> 或 "" 包裹 */
-        if (c != '<' && c != '"') {
-            printf("[词法错误 line:%d] #include 文件名应该用 <> 或 \"\" 包裹，实际是 '%c'\n", line_no, c);
-            lex_error_count++;
-        }
-
-        /* 跳过整行剩余内容 */
-        while ((c = fgetc(fp_src)) != EOF && c != '\n')
-            ;
-        if (c == '\n') line_no++;
-        return;
-    }
-    else if (strcmp(cmd, "define") == 0) {
-        /* 跳过 define 后面的空格和制表符 */
-        while ((c = fgetc(fp_src)) != EOF && (c == ' ' || c == '\t'))
-            ;
-
-        /* 检查：#define 后面有没有宏名 */
-        if (c == '\n' || c == EOF) {
-            printf("[词法错误 line:%d] #define 缺少宏名\n", line_no);
-            lex_error_count++;
-            if (c == '\n') line_no++;
-            return;
-        }
-
-        /* 检查：宏名是否以字母或下划线开头 */
-        if (!isalpha(c) && c != '_') {
-            printf("[词法错误 line:%d] #define 宏名应该以字母或下划线开头，实际是 '%c'\n", line_no, c);
-            lex_error_count++;
-        }
-
-        /* 跳过整行剩余内容 */
-        while ((c = fgetc(fp_src)) != EOF && c != '\n')
-            ;
-        if (c == '\n') line_no++;
-        return;
-    }
-
-    /* 其他预处理指令 */
-    while ((c = fgetc(fp_src)) != EOF && c != '\n')
-        ;
+    token_text[idx] = '\0';
     if (c == '\n') line_no++;
+}
+
+/* 读取块注释内容（进入时已经读掉了 / 和 *），内容存进token_text */
+static void read_block_comment(void)
+{
+    int c;
+    int idx = 0;
+    token_text[idx++] = '/';
+    token_text[idx++] = '*';
+    while ((c = fgetc(fp_src)) != EOF) {
+        if (idx < TOKEN_TEXT_LEN - 1)
+            token_text[idx++] = (char)c;
+        if (c == '\n') line_no++;
+        if (c == '*') {
+            int next = fgetc(fp_src);
+            if (next == '/') {
+                if (idx < TOKEN_TEXT_LEN - 1)
+                    token_text[idx++] = '/';
+                break;
+            } else {
+                ungetc(next, fp_src);
+            }
+        }
+    }
+    token_text[idx] = '\0';
+}
+
+/* 读取预处理指令整行内容，存进token_text，返回指令类型 */
+static int read_preprocessor(void)
+{
+    int c;
+    int idx = 0;
+    int kind = PRE_DEFINE;  // 默认是define
+    token_text[idx++] = '#';
+    /* 读取指令名 */
+    char cmd[32] = {0};
+    int cmd_idx = 0;
+    while ((c = fgetc(fp_src)) != EOF && isalpha(c) && cmd_idx < 31) {
+        cmd[cmd_idx++] = (char)c;
+        if (idx < TOKEN_TEXT_LEN - 1)
+            token_text[idx++] = (char)c;
+    }
+    if (strcmp(cmd, "include") == 0) kind = PRE_INCLUDE;
+    /* 读取整行剩余内容 */
+    while (c != EOF && c != '\n') {
+        if (idx < TOKEN_TEXT_LEN - 1)
+            token_text[idx++] = (char)c;
+        c = fgetc(fp_src);
+    }
+    token_text[idx] = '\0';
+    if (c == '\n') line_no++;
+    return kind;
 }
 
 int gettoken(void)
@@ -153,11 +130,11 @@ again:
     if (c == '/') {
         int next = fgetc(fp_src);
         if (next == '/') {
-            skip_line_comment();
-            goto again;
+            read_line_comment();
+            return COMMENT;
         } else if (next == '*') {
-            skip_block_comment();
-            goto again;
+            read_block_comment();
+            return COMMENT;
         } else {
             ungetc(next, fp_src);
             token_text[0] = '/';
@@ -168,8 +145,7 @@ again:
 
     /* 处理预处理指令 '#' */
     if (c == '#') {
-        skip_preprocessor();
-        goto again;
+        return read_preprocessor();
     }
 
     /* 1.字母/下划线开头：标识符或关键字  */
@@ -448,6 +424,9 @@ const char* token_name(int kind)
         case SEMI:         return "分号;";
         case COMMA:        return "逗号,";
         case HASH:         return "井号#";
+        case PRE_INCLUDE:  return "预处理-include";
+        case PRE_DEFINE:   return "预处理-define";
+        case COMMENT:      return "注释";
         case TOKEN_EOF:    return "文件结束";
         case ERROR_TOKEN:  return "错误token";
         default:            return "未知";

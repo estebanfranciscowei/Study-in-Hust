@@ -3,7 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-/*  内部工具：分配结点  */
+/* 分配结点 */
 static AstNode* alloc_node(AstNodeType t)
 {
     AstNode *p = (AstNode*)malloc(sizeof(AstNode));
@@ -15,7 +15,7 @@ static AstNode* alloc_node(AstNodeType t)
     return p;
 }
 
-/*  结点创建函数  */
+/* 结点创建函数 */
 AstNode* ast_new_prog(AstNode *ext_list)
 {
     AstNode *n = alloc_node(AST_PROG);
@@ -266,6 +266,28 @@ AstNode* ast_new_type(int tk)
 AstNode* ast_new_empty(void)
 {
     return alloc_node(AST_EMPTY);
+}
+
+
+AstNode* ast_new_include(const char *text)
+{
+    AstNode *n = alloc_node(AST_INCLUDE);
+    if (text) strncpy(n->u.str_val, text, sizeof(n->u.str_val) - 1);
+    return n;
+}
+
+AstNode* ast_new_define(const char *text)
+{
+    AstNode *n = alloc_node(AST_DEFINE);
+    if (text) strncpy(n->u.str_val, text, sizeof(n->u.str_val) - 1);
+    return n;
+}
+
+AstNode* ast_new_comment(const char *text)
+{
+    AstNode *n = alloc_node(AST_COMMENT);
+    if (text) strncpy(n->u.str_val, text, sizeof(n->u.str_val) - 1);
+    return n;
 }
 
 /*  添加兄弟结点  */
@@ -598,6 +620,15 @@ void ast_print(AstNode *root, int indent)
             }
             break;
         }
+        case AST_INCLUDE:
+            printf("预处理指令：%s\n", root->u.str_val);
+            break;
+        case AST_DEFINE:
+            printf("宏定义：%s\n", root->u.str_val);
+            break;
+        case AST_COMMENT:
+            printf("注释：%s\n", root->u.str_val);
+            break;
         default:
             printf("未知结点 type=%d\n", root->type);
             break;
@@ -907,6 +938,15 @@ static void gen_stmt(AstNode *stmt, FILE *fp, int indent)
         case AST_CONTINUE:
             fprintf(fp, "continue;\n");
             break;
+        case AST_INCLUDE:
+            fprintf(fp, "%s\n", stmt->u.str_val);
+            break;
+        case AST_DEFINE:
+            fprintf(fp, "%s\n", stmt->u.str_val);
+            break;
+        case AST_COMMENT:
+            fprintf(fp, "%s\n", stmt->u.str_val);
+            break;
         default:
             break;
     }
@@ -962,6 +1002,15 @@ void ast_gen_format(AstNode *root, FILE *fp_out)
                 fprintf(fp_out, "\n");
                 break;
             }
+            case AST_INCLUDE:
+                fprintf(fp_out, "%s\n", ext->u.str_val);
+                break;
+            case AST_DEFINE:
+                fprintf(fp_out, "%s\n", ext->u.str_val);
+                break;
+            case AST_COMMENT:
+                fprintf(fp_out, "%s\n", ext->u.str_val);
+                break;
             default:
                 break;
         }

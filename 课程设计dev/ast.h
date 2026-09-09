@@ -36,6 +36,9 @@ typedef enum {
     AST_CHAR_CONST,     /* 字符常量叶子 */
     AST_STRING_CONST,   /* 字符串常量叶子 */
     AST_TYPE,           /* 类型结点 */
+    AST_INCLUDE,        /* #include指令 */
+    AST_DEFINE,         /* #define指令 */
+    AST_COMMENT,        /* 注释 */
     AST_EMPTY           /* 空结点(用于for空表达式等) */
 } AstNodeType;
 
@@ -90,6 +93,9 @@ AstNode* ast_new_float_const(double v, const char *text);
 AstNode* ast_new_char_const(const char *text);
 AstNode* ast_new_string_const(const char *text);
 AstNode* ast_new_type(int tk);
+AstNode* ast_new_include(const char *text);
+AstNode* ast_new_define(const char *text);
+AstNode* ast_new_comment(const char *text);
 AstNode* ast_new_empty(void);
 
 /*  树操作  */

@@ -48,6 +48,7 @@ enum token_kind {
     /* 预处理伪token */
     PRE_INCLUDE,
     PRE_DEFINE,
+    COMMENT,        /* 注释 */
     /* 文件结束 */
     TOKEN_EOF
 };
